@@ -80,7 +80,8 @@ if __name__ == "__main__":
             ],
             "weight_algo": "he",
             "bias_algo": "zeros",
-            "activation_algos": ["embedding", "tanh", "softmax"],
+            "activation_algos": ["embedding", "linear", "batchnorm", "tanh", "softmax"],
+            "optimizer": "stochastic",
         }
         create_model_resp = requests.post(f"{prediction_server_url}/model/", json=create_model_request)
         print(f"{create_model_resp.status_code} - {create_model_resp.json()}")
