@@ -1,3 +1,4 @@
+import random
 import time
 import torch
 from requests import Response
@@ -46,6 +47,55 @@ def make_prediction(input_vector: list[int]) -> list[float]:
 
     raise RuntimeError(f"Failed to receive a good prediction: {resp.status_code} - {resp.json()}")
 
+def calculate_cost(cost_input_data: list[tuple]) -> float:
+    cost_request = model_request | {
+        "input": {
+            "activation_vector": [input_data for input_data,_ in cost_input_data],
+            "target_vector": [target for _,target in cost_input_data],
+        },
+    }
+    resp = requests.post(f"{prediction_server_url}/output/", json=cost_request)
+
+    if resp.status_code == 200:
+        return resp.json()['cost']
+
+    raise RuntimeError(f"Failed to calculate cost: {resp.status_code} - {resp.json()}")
+
+def run_training(num_trains: int, train_batch_size: int, train_data: list[tuple]):
+    # Prepare training request parameters
+    num_train_items = len(train_data)
+    training_epochs = int(num_train_items / train_batch_size)
+    training_model_request = model_request | {
+        "epochs": training_epochs,
+        "learning_rate": 0.005,
+        "decay_rate": 0.999,
+        "dropout_rate": 0.0,
+        "l2_lambda": 0.01,
+        "adam_beta1": 0.9,
+        "adam_beta2": 0.999,
+        "adam_epsilon": 1e-8,
+    }
+
+    # Prepare training request
+    training_request = training_model_request | {
+        "training_data": [{
+            "activation_vector": input_vector,
+            "target_vector": target_vector,
+        } for input_vector, target_vector in train_data],
+    }
+    print(f"Prepared training data of size {num_train_items} to run for {training_epochs} epochs")
+
+    for i in range(num_trains):
+        # Submit training request to prediction service
+        training_resp = requests.put(f"{prediction_server_url}/train/", json=training_request)
+        print(f"Submitted: {training_resp.status_code} - {training_resp.json()}")
+        # wait a bit
+        time.sleep(1)
+        # check progress
+        request_prediction_progress(training_epochs)
+        # mark end of training request
+        print(f"###### Finished Training Round {i + 1} of {num_trainings} ########")
+
 if __name__ == "__main__":
     # User selection
     user_selection = input('Choose (S) generate samples or (T) perform training:').upper()
@@ -78,7 +128,7 @@ if __name__ == "__main__":
                 # hidden non-linear activation layer and softmax
                 embed_depth * block_size, 100, num_tokens
             ],
-            "weight_algo": "he",
+            "weight_algo": "xavier",
             "bias_algo": "zeros",
             "activation_algos": ["embedding", "linear", "batchnorm", "tanh", "softmax"],
             "optimizer": "stochastic",
@@ -103,42 +153,36 @@ if __name__ == "__main__":
                 # keep a running context of block size
                 input_context = input_context[1:] + [label_idx]
 
-        # Prepare training request parameters
-        training_epochs = 10
-        train_model_request = model_request | {
-            "epochs": training_epochs,
-            "learning_rate": 0.005,
-            "decay_rate": 0.999,
-            "dropout_rate": 0.0,
-            "l2_lambda": 0.01,
-            "adam_beta1": 0.9,
-            "adam_beta2": 0.999,
-            "adam_epsilon": 1e-8,
-        }
+        # Build data splits
+        random.shuffle(training_data)
 
-        # Prepare training request
-        training_request = train_model_request | {
-            "training_data": [{
-                "activation_vector": input_vector,
-                "target_vector": target_vector,
-            } for input_vector, target_vector in training_data],
-        }
-        print(f"Prepared training data of size {len(training_data)}...")
+        num_training_items = len(training_data)
+        print(f"{num_training_items=}")
+        num_split_train_items = int(0.8 * num_training_items)
+        print(f"{num_split_train_items=}")
+        num_split_val_items = int(0.1 * num_training_items)
+        print(f"{num_split_val_items=}")
+        num_split_test_items = num_training_items - num_split_train_items - num_split_val_items
+        print(f"{num_split_test_items=}")
 
-        # Ask for training length
+        split_train_data = training_data[:num_split_train_items]
+        split_val_data = training_data[num_split_train_items:num_split_train_items + num_split_val_items]
+        split_test_data = training_data[num_split_train_items + num_split_val_items:]
+
+        # Ask for training options
         num_trainings = int(input('How many times shall we perform training?'))
         print(f"{num_trainings=}")
+        training_batch_size = int(input('Set training batch size='))
+        print(f"{training_batch_size=}")
 
-        for i in range(num_trainings):
-            # Submit training request to prediction service
-            training_resp = requests.put(f"{prediction_server_url}/train/", json=training_request)
-            print(f"Submitted: {training_resp.status_code} - {training_resp.json()}")
-            # wait a bit
-            time.sleep(1)
-            # check progress
-            request_prediction_progress(training_epochs)
-            # mark end of training request
-            print(f"###### Finished Training Round {i+1} of {num_trainings} ########")
+        # Run training on split
+        run_training(num_trainings, training_batch_size, split_train_data)
+
+        # Calculate cost on split value and test
+        split_val_cost = calculate_cost(split_val_data)
+        print(f"{split_val_cost=}")
+        split_test_cost = calculate_cost(split_test_data)
+        print(f"{split_test_cost=}")
 
     else: # Generate sample
         # Build reverse lookup
