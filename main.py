@@ -10,11 +10,11 @@ model_request = {
     "model_id": "multigram-predictor"
 }
 
-def request_prediction_progress(min_num_progress = 0, timeout_secs = 30) -> Response:
+def request_prediction_progress(timeout_secs = 300) -> Response:
     # keep requesting until condition met or times out
     for _ in range(timeout_secs):
-        # wait a second
-        time.sleep(1)
+        # wait for progress to build up
+        time.sleep(5)
         # check progress
         progress_resp = requests.get(f"{prediction_server_url}/progress/", params=model_request)
         progress_status, progress_body = progress_resp.status_code, progress_resp.json()
@@ -26,7 +26,9 @@ def request_prediction_progress(min_num_progress = 0, timeout_secs = 30) -> Resp
                 avg_cost = progress_body["average_cost"]
                 print(f"{cost=}")
                 print(f"{avg_cost=}")
-            if len(progress_body["progress"]) < min_num_progress:
+            model_status = progress_body["status"]
+            print(f"{model_status=}")
+            if model_status == "Training":
                 continue # checking
         else: # barf possible error body
             print(f"{progress_body=}")
@@ -89,10 +91,8 @@ def run_training(num_trains: int, train_batch_size: int, train_data: list[tuple]
         # Submit training request to prediction service
         training_resp = requests.put(f"{prediction_server_url}/train/", json=training_request)
         print(f"Submitted: {training_resp.status_code} - {training_resp.json()}")
-        # wait a bit
-        time.sleep(1)
         # check progress
-        request_prediction_progress(training_epochs)
+        request_prediction_progress()
         # mark end of training request
         print(f"###### Finished Training Round {i + 1} of {num_trainings} ########")
 
