@@ -32,6 +32,7 @@ def request_prediction_progress(timeout_secs = 300) -> Response:
                 continue # checking
         else: # barf possible error body
             print(f"{progress_body=}")
+            continue # checking
         return progress_resp # done
     # timed out
     raise TimeoutError("Training took too long")
