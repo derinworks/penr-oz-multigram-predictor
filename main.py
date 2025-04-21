@@ -10,11 +10,11 @@ model_request = {
     "model_id": "multigram-predictor"
 }
 
-def request_prediction_progress(timeout_secs = 300) -> Response:
+def request_prediction_progress(delay_secs = 5, timeout_secs = 300) -> Response:
     # keep requesting until condition met or times out
-    for _ in range(timeout_secs):
-        # wait for progress to build up
-        time.sleep(5)
+    for _ in range(timeout_secs // max(1, delay_secs)):
+        if delay_secs > 0: # wait for progress to build up
+            time.sleep(delay_secs)
         # check progress
         progress_resp = requests.get(f"{prediction_server_url}/progress/", params=model_request)
         progress_status, progress_body = progress_resp.status_code, progress_resp.json()
@@ -32,7 +32,8 @@ def request_prediction_progress(timeout_secs = 300) -> Response:
                 continue # checking
         else: # barf possible error body
             print(f"{progress_body=}")
-            continue # checking
+            if progress_resp.status_code == 400: # malformed input
+                continue # checking
         return progress_resp # done
     # timed out
     raise TimeoutError("Training took too long")
