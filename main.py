@@ -71,13 +71,8 @@ def run_training(num_trains: int, train_batch_size: int, train_data: list[tuple]
     training_epochs = int(num_train_items / train_batch_size)
     training_model_request = model_request | {
         "epochs": training_epochs,
-        "learning_rate": 0.005,
-        "decay_rate": 0.999,
-        "dropout_rate": 0.0,
-        "l2_lambda": 0.01,
-        "adam_beta1": 0.9,
-        "adam_beta2": 0.999,
-        "adam_epsilon": 1e-8,
+        "learning_rate": 0.01,
+        "decay_rate": 0.9999,
     }
 
     # Prepare training request
@@ -118,21 +113,40 @@ if __name__ == "__main__":
     # declare block context size
     block_size = 3
     # embedding depth number of dimensions
-    embed_depth = 2
+    embed_depth = 10
 
     # Create prediction model if not already
-    model_resp = request_prediction_progress()
+    model_resp = request_prediction_progress(0, 1)
     if model_resp.status_code == 404:
         # Include embedding layer and hidden non-linear activation layer
+        hidden_layer_size = 100
         create_model_request = model_request | {
             "layer_sizes": [
-                num_tokens, embed_depth, # embedding layer
-                # hidden non-linear activation layer and softmax
-                embed_depth * block_size, 100, num_tokens
+                # embedding layer
+                num_tokens, embed_depth,
+                # hidden activation layers
+                embed_depth * block_size,
+                hidden_layer_size,
+                hidden_layer_size,
+                hidden_layer_size,
+                hidden_layer_size,
+                # output layer
+                hidden_layer_size, num_tokens,
             ],
             "weight_algo": "xavier",
             "bias_algo": "zeros",
-            "activation_algos": ["embedding", "linear", "batchnorm", "tanh", "softmax"],
+            "activation_algos": [
+                # embedding layer
+                "embedding",
+                # hidden activation layers
+                "linear", "batchnorm", "tanh",
+                "linear", "batchnorm", "tanh",
+                "linear", "batchnorm", "tanh",
+                "linear", "batchnorm", "tanh",
+                "linear", "batchnorm", "tanh",
+                # output layer
+                "linear", "batchnorm", "softmax",
+            ],
             "optimizer": "stochastic",
         }
         create_model_resp = requests.post(f"{prediction_server_url}/model/", json=create_model_request)
