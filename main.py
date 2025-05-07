@@ -73,6 +73,7 @@ def run_training(num_trains: int, train_batch_size: int, train_data: list[tuple]
         "epochs": training_epochs,
         "learning_rate": 0.01,
         "decay_rate": 0.9999,
+        "dropout_rate": 0.0,
     }
 
     # Prepare training request
@@ -134,7 +135,7 @@ if __name__ == "__main__":
                 hidden_layer_size, num_tokens,
             ],
             "weight_algo": "xavier",
-            "bias_algo": "zeros",
+            "bias_algo": "",
             "activation_algos": [
                 # embedding layer
                 "embedding",
