@@ -219,7 +219,7 @@ if __name__ == "__main__":
 
         # Build predictions
         token_indices: list[int] = [0] * block_size
-        for _ in range(num_samples):
+        for sample_idx in range(num_samples * 2): # twice to skip any empty samples
             # Reset sample
             sample = ""
             # Generate tokens until word break seen for chosen number of words
@@ -234,5 +234,9 @@ if __name__ == "__main__":
                     break
                 # Append next token
                 sample += tokens[output_idx]
-            # Present sample
-            print(f"{sample=}")
+            # Present sample if not empty
+            if sample:
+                print(f"{sample=}")
+            # Enough samples then break
+            if sample_idx >= num_samples:
+                break
