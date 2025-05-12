@@ -10,7 +10,7 @@ model_request = {
     "model_id": "multigram-predictor"
 }
 
-def request_prediction_progress(delay_secs = 5, timeout_secs = 300) -> Response:
+def request_prediction_progress(delay_secs = 5, timeout_secs = 600, log_prefix = "") -> Response:
     # keep requesting until condition met or times out
     for _ in range(timeout_secs // max(1, delay_secs)):
         if delay_secs > 0: # wait for progress to build up
@@ -18,7 +18,7 @@ def request_prediction_progress(delay_secs = 5, timeout_secs = 300) -> Response:
         # check progress
         progress_resp = requests.get(f"{prediction_server_url}/progress/", params=model_request)
         progress_status, progress_body = progress_resp.status_code, progress_resp.json()
-        print(f"{progress_status=}")
+        print(f"{log_prefix}{progress_status=}")
         if progress_resp.status_code == 200:
             if len(progress_body["progress"]) > 0: # log info about progress
                 costs = [progress["cost"] for progress in progress_body["progress"]]
@@ -26,6 +26,8 @@ def request_prediction_progress(delay_secs = 5, timeout_secs = 300) -> Response:
                 avg_cost = progress_body["average_cost"]
                 print(f"{cost=}")
                 print(f"{avg_cost=}")
+                last_epoch = progress_body["progress"][-1]["epoch"]
+                print(f"{last_epoch=}")
             model_status = progress_body["status"]
             print(f"{model_status=}")
             if model_status == "Training":
@@ -65,14 +67,16 @@ def calculate_cost(cost_input_data: list[tuple]) -> float:
 
     raise RuntimeError(f"Failed to calculate cost: {resp.status_code} - {resp.json()}")
 
-def run_training(num_trains: int, train_batch_size: int, train_data: list[tuple]):
+def run_training(training_epochs: int, train_batch_size: int, train_data: list[tuple]):
     # Prepare training request parameters
     num_train_items = len(train_data)
-    training_epochs = int(num_train_items / train_batch_size)
     training_model_request = model_request | {
         "epochs": training_epochs,
-        "learning_rate": 0.01,
-        "decay_rate": 0.9999,
+        "learning_rate": 0.05,
+        "batch_size": train_batch_size,
+        "decay_rate": 0.9999847, # reduces learning rate by a factor of 10 every 150,000 epochs
+        "dropout_rate": 0.0, # no drop out
+        "l2_lambda": 0.0, # no L2 regularization
     }
 
     # Prepare training request
@@ -82,16 +86,18 @@ def run_training(num_trains: int, train_batch_size: int, train_data: list[tuple]
             "target_vector": target_vector,
         } for input_vector, target_vector in train_data],
     }
-    print(f"Prepared training data of size {num_train_items} to run for {training_epochs} epochs")
+    print(f"Prepared training data of size {num_train_items} to run for {training_epochs} epochs "
+          f"with batch size {train_batch_size}")
 
-    for i in range(num_trains):
-        # Submit training request to prediction service
-        training_resp = requests.put(f"{prediction_server_url}/train/", json=training_request)
-        print(f"Submitted: {training_resp.status_code} - {training_resp.json()}")
-        # check progress
-        request_prediction_progress()
-        # mark end of training request
-        print(f"###### Finished Training Round {i + 1} of {num_trainings} ########")
+    timeout_secs = max(training_epochs // 10, 10)
+
+    # Submit training request to prediction service
+    training_resp = requests.put(f"{prediction_server_url}/train/", json=training_request)
+    print(f"Submitted: {training_resp.status_code} - {training_resp.json()}")
+    # check progress
+    request_prediction_progress(timeout_secs=timeout_secs)
+    # mark end of training request
+    print(f"###### Finished Training Round ########")
 
 if __name__ == "__main__":
     # User selection
@@ -103,12 +109,16 @@ if __name__ == "__main__":
         example = f.read()
     example = example.lower() # work with lowercase only
 
+    word_break = " "
+    words = example.split(word_break)
+
     # Extract tokens
     tokens = sorted(list(set(ch for ch in example if ch.isalpha())))
-    tokens.insert(0, " ") # space denotes word break
+    tokens.insert(0, word_break)
     num_tokens = len(tokens)
     print(f"{num_tokens=}")
     s2i = {s: i for i, s in enumerate(tokens)}
+    print(f"{s2i=}")
 
     # declare block context size
     block_size = 3
@@ -119,35 +129,31 @@ if __name__ == "__main__":
     model_resp = request_prediction_progress(0, 1)
     if model_resp.status_code == 404:
         # Include embedding layer and hidden non-linear activation layer
-        hidden_layer_size = 100
+        hidden_layer_size = 128
         create_model_request = model_request | {
             "layer_sizes": [
                 # embedding layer
                 num_tokens, embed_depth,
-                # hidden activation layers
+                # hidden layers
                 embed_depth * block_size,
-                hidden_layer_size,
-                hidden_layer_size,
-                hidden_layer_size,
                 hidden_layer_size,
                 # output layer
                 hidden_layer_size, num_tokens,
             ],
             "weight_algo": "xavier",
-            "bias_algo": "zeros",
+            "bias_algo": "",
             "activation_algos": [
                 # embedding layer
                 "embedding",
-                # hidden activation layers
-                "linear", "batchnorm", "tanh",
-                "linear", "batchnorm", "tanh",
-                "linear", "batchnorm", "tanh",
+                # hidden layers
                 "linear", "batchnorm", "tanh",
                 "linear", "batchnorm", "tanh",
                 # output layer
-                "linear", "batchnorm", "softmax",
+                "softmax",
             ],
             "optimizer": "stochastic",
+            "batchnorm_eps": 1e-4,
+            "batchnorm_momentum": 0.025,
         }
         create_model_resp = requests.post(f"{prediction_server_url}/model/", json=create_model_request)
         print(f"{create_model_resp.status_code} - {create_model_resp.json()}")
@@ -156,22 +162,26 @@ if __name__ == "__main__":
 
     # Perform according to user selection
     if user_selection == 'T':
+        # Shuffle words
+        random.shuffle(words)
         # Build training data
         training_data: list[tuple] = []
         # Start context with block of word breaks
         input_context = [0] * block_size
-        for s in example:
-            label_idx = s2i[s]
-            # check no consecutive spaces and token is in vocabulary
-            if not all(idx == 0 for idx in input_context + [label_idx]) and s in s2i.keys():
-                # add to training data
-                training_data.append((input_context, [label_idx]))
-                # keep a running context of block size
-                input_context = input_context[1:] + [label_idx]
+        for w in words:
+            for s in w + word_break:
+                if s in s2i.keys(): # check token is in vocabulary
+                    label_idx = s2i[s]
+                    # add to training data
+                    training_data.append((input_context, [label_idx]))
+                    # keep a running context of block size or reset context for word break
+                    input_context = input_context[1:] + [label_idx] if label_idx > 0 else [0] * block_size
+
+        # Preview training data
+        for x, y in training_data[:21]:
+            print(f"{''.join(tokens[ix] for ix in x)} --> {''.join(tokens[iy] for iy in y)}")
 
         # Build data splits
-        random.shuffle(training_data)
-
         num_training_items = len(training_data)
         print(f"{num_training_items=}")
         num_split_train_items = int(0.8 * num_training_items)
@@ -186,24 +196,23 @@ if __name__ == "__main__":
         split_test_data = training_data[num_split_train_items + num_split_val_items:]
 
         # Ask for training options
-        num_trainings = int(input('How many times shall we perform training?'))
-        print(f"{num_trainings=}")
+        num_training_epochs = int(input('How many epochs shall we perform training?'))
+        print(f"{num_training_epochs=}")
         training_batch_size = int(input('Set training batch size='))
         print(f"{training_batch_size=}")
 
         # Run training on split
-        run_training(num_trainings, training_batch_size, split_train_data)
+        run_training(num_training_epochs, training_batch_size, split_train_data)
 
-        # Calculate cost on split value and test
+        # Calculate cost on splits
+        split_train_cost = calculate_cost(split_train_data)
+        print(f"{split_train_cost=}")
         split_val_cost = calculate_cost(split_val_data)
         print(f"{split_val_cost=}")
         split_test_cost = calculate_cost(split_test_data)
         print(f"{split_test_cost=}")
 
     else: # Generate sample
-        # Build reverse lookup
-        i2s = {i: s for i, s in enumerate(tokens)}
-
         # Ask for number of words
         num_samples = int(input('How many samples would you like?'))
         print(f"{num_samples=}")
@@ -224,6 +233,6 @@ if __name__ == "__main__":
                 if output_idx == 0:
                     break
                 # Append next token
-                sample += i2s[output_idx]
+                sample += tokens[output_idx]
             # Present sample
             print(f"{sample=}")
