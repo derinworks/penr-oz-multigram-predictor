@@ -121,9 +121,11 @@ if __name__ == "__main__":
     print(f"{s2i=}")
 
     # declare block context size
-    block_size = 3
+    block_size = 8
     # embedding depth number of dimensions
-    embed_depth = 10
+    embed_depth = 24
+    # declare block fusing size
+    fuse_size = 2
 
     # Create prediction model if not already
     model_resp = request_prediction_progress(0, 1)
@@ -135,10 +137,11 @@ if __name__ == "__main__":
                 # embedding layer
                 num_tokens, embed_depth,
                 # hidden layers
-                embed_depth * block_size,
-                hidden_layer_size,
+                embed_depth * fuse_size, hidden_layer_size,
+                hidden_layer_size * fuse_size, hidden_layer_size,
+                hidden_layer_size * fuse_size, hidden_layer_size,
                 # output layer
-                hidden_layer_size, num_tokens,
+                num_tokens,
             ],
             "weight_algo": "xavier",
             "bias_algo": "",
@@ -146,8 +149,9 @@ if __name__ == "__main__":
                 # embedding layer
                 "embedding",
                 # hidden layers
-                "linear", "batchnorm", "tanh",
-                "linear", "batchnorm", "tanh",
+                "flatten", "linear", "batchnorm", "tanh",
+                "flatten", "linear", "batchnorm", "tanh",
+                "flatten", "linear", "batchnorm", "tanh",
                 # output layer
                 "softmax",
             ],
@@ -238,5 +242,5 @@ if __name__ == "__main__":
             if sample:
                 print(f"{sample=}")
             # Enough samples then break
-            if sample_idx >= num_samples:
+            if sample_idx >= num_samples - 1:
                 break
