@@ -158,6 +158,7 @@ if __name__ == "__main__":
             "optimizer": "stochastic",
             "batchnorm_eps": 1e-4,
             "batchnorm_momentum": 0.025,
+            "confidence": 0.2,
         }
         create_model_resp = requests.post(f"{prediction_server_url}/model/", json=create_model_request)
         print(f"{create_model_resp.status_code} - {create_model_resp.json()}")
